@@ -8,7 +8,7 @@
 
 
 #define NUM_LEDS 16*16
-#define DATA_PIN 5  //It's D1 on LoLin NodeMCU
+#define DATA_PIN 2  //It's D4 on LoLin NodeMCU
 
 // Central European Time (Frankfurt, Paris, Warsaw)
 TimeChangeRule CEST = {"CEST", Last, Sun, Mar, 2, 120};     // Central European Summer Time
