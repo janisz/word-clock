@@ -18,3 +18,6 @@
 | D | W | U | N | A | S | T | E | J | Z | S | Z | Ó | S | T | A |
 | C | Z | W | A | R | T | A | S | Q | D | R | U | G | I | E | J |
 | D | Z | I | E | W | I | Ą | T | E | J | H | Ó | S | M | E | J |
+
+
+![](circuit.png)
