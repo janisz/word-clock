@@ -6,69 +6,142 @@
 #include <WiFiUdp.h>
 #include <Timezone.h>    // https://github.com/JChristensen/Timezone
 
+#include <ThreeWire.h>
+#include <RtcDS1302.h>
+// CONNECTIONS:
+
+
 
 #define NUM_LEDS 16*16
-#define DATA_PIN 2  //It's D4 on LoLin NodeMCU
+#define DATA_PIN 2        // D4
+
+#define DS1302_RST_PIN 16 // D0
+#define DS1302_CLK_PIN 5  // D1
+#define DS1302_DAT_PIN 4  // D2
+
+// https://github.com/Makuna/Rtc/blob/master/examples/DS1302_Simple/DS1302_Simple.ino
+ThreeWire myWire(DS1302_CLK_PIN, DS1302_DAT_PIN, DS1302_RST_PIN);
+RtcDS1302<ThreeWire> Rtc(myWire);
 
 // Central European Time (Frankfurt, Paris, Warsaw)
 TimeChangeRule CEST = {"CEST", Last, Sun, Mar, 2, 120};     // Central European Summer Time
 TimeChangeRule CET = {"CET ", Last, Sun, Oct, 3, 60};       // Central European Standard Time
 Timezone CE(CEST, CET);
 
-const char* ssid     = "...";     // The SSID (name) of the Wi-Fi network you want to connect to
-const char* password = "...";     // The password of the Wi-Fi network
+const char* ssid     = "clock";         // The SSID (name) of the Wi-Fi network you want to connect to
+const char* password = "WhatTimeIsIt?";     // The password of the Wi-Fi network
 
 const char* ntpServer = "pool.ntp.org";
-WiFiUDP ntpUDP;
 
-// By default 'pool.ntp.org' is used with 60 seconds update interval and
-// no offset
-NTPClient timeClient(ntpUDP);
 
 CRGB leds[NUM_LEDS];
 
 void setup() {
   Serial.begin(115200);         // Start the Serial communication to send messages to the computer
-  delay(1000);
-
+  delay(10);
   FastLED.addLeds<WS2812B, DATA_PIN, RGB>(leds, NUM_LEDS);  // GRB ordering is typical
 
-  //test();
+  Serial.print("HELLO");
 
-  Serial.println("HELLO");
+  Serial.print("compiled: ");
+  Serial.print(__DATE__);
+  Serial.println(__TIME__);
 
-  WiFi.begin(ssid, password);             // Connect to the network
-  Serial.print("Connecting to ");
-  Serial.print(ssid); Serial.println(" ...");
+  Rtc.Begin();
+  Serial.println();
 
-  int i = 0;
-  while (WiFi.status() != WL_CONNECTED) { // Wait for the Wi-Fi to connect
-    clear(CRGB::Black);
-    showTime(i % 24, i % 60, 0);
-    FastLED.show();
-    Serial.print(++i);
-    Serial.print(' ');
-    delay(10);
+  RtcDateTime compiled = RtcDateTime("Dec 31 2020", "21:31:24");
+  RtcDateTime now = Rtc.GetDateTime();
+  if (now < compiled || !Rtc.IsDateTimeValid())
+  {
+    if (now < compiled) {
+      Serial.println(now.Epoch32Time());
+      Serial.println("Now is earlier than compiled");
+    }
+    if (!Rtc.IsDateTimeValid()) {
+      Serial.println("RTC lost confidence in the DateTime!");
+    }
+    // Common Causes:
+    //    1) first time you ran and the device wasn't running yet
+    //    2) the battery on the device is low or even missing
+
+
+
+    WiFi.begin(ssid, password);             // Connect to the network
+    Serial.print("Connecting to ");
+    Serial.print(ssid); Serial.println(" ...");
+
+    int i = 0;
+    while (WiFi.status() != WL_CONNECTED) { // Wait for the Wi-Fi to connect
+      clear(CHSV(i++, 255, 255));
+      FastLED.show();
+      delay(10);
+    }
+
+    WiFiUDP ntpUDP;
+
+    // By default 'pool.ntp.org' is used with 60 seconds update interval and
+    // no offset
+    NTPClient timeClient(ntpUDP);
+
+    Serial.println('\n');
+    Serial.println("WiFi: Connection established!");
+    Serial.print("IP address:\t");
+    Serial.println(WiFi.localIP());
+    timeClient.begin();
+    while (!timeClient.forceUpdate()) {
+      clear(CHSV(i++, 255, 255));
+      FastLED.show();
+      delay(10);
+    }
+    Serial.println("Got time from NTP server: ");
+    Serial.println(timeClient.getFormattedTime());
+    RtcDateTime ntpTime = RtcDateTime();
+    ntpTime.InitWithEpoch32Time(timeClient.getEpochTime());
+    Serial.println(timeClient.getEpochTime());
+    Serial.println(ntpTime.Epoch32Time());
+
+    if (Rtc.GetIsWriteProtected())
+    {
+      Serial.println("RTC was write protected, enabling writing now");
+      Rtc.SetIsWriteProtected(false);
+    }
+
+    if (!Rtc.GetIsRunning())
+    {
+      Serial.println("RTC was not actively running, starting now");
+      Rtc.SetIsRunning(true);
+    }
+    Rtc.SetDateTime(ntpTime);
+    while (!Rtc.IsDateTimeValid()) {
+      clear(CHSV(i++, 255, 255));
+      FastLED.show();
+      delay(10);
+    }
+
+    Serial.println(Rtc.GetDateTime().Epoch32Time());
+    Serial.println("Reset..");
+    ESP.restart();
   }
-
-  Serial.println('\n');
-  Serial.println("Connection established!");
-  Serial.print("IP address:\t");
-  Serial.println(WiFi.localIP());         // Send the IP address of the ESP8266 to the computer
-
-  timeClient.begin();
-
 }
+
 
 void loop() {
-  timeClient.update();
-  Serial.println(timeClient.getFormattedTime());
-  printDateTime(CE, timeClient.getEpochTime(), "Warsaw");
+  RtcDateTime now = Rtc.GetDateTime();
+  if (!now.IsValid())
+  {
+    // Common Causes:
+    //    1) the battery on the device is low or even missing and the power line was disconnected
+    Serial.println("RTC lost confidence in the DateTime!");
+    Serial.println("Reset..");
+    ESP.restart();
+  }
+
+  clear(CRGB::Black);
+  printDateTime(CE, now.Epoch32Time(), "Warsaw");
+  FastLED.show();
   delay(1000);
 }
-
-
-
 
 // given a Timezone object, UTC and a string description, convert and print local time with time zone
 void printDateTime(Timezone tz, time_t utc, const char *descr)
@@ -84,9 +157,8 @@ void printDateTime(Timezone tz, time_t utc, const char *descr)
   Serial.print(buf);
   Serial.print(' ');
   Serial.println(descr);
-  clear(CRGB::Black);
-  showTime(hour(t), minute(t), second(t));
-  FastLED.show();
+  showTime(hour(t), minute(t), CHSV(t / 10, 255, getBrightness()));
+
 }
 
 
@@ -256,7 +328,7 @@ void test() {
     for (int i = 0; i <= 12; i++) {
       for (int m = 0; m <= 60; m++) {
         clear(CRGB::Black);
-        showTime(i, m, 0);
+        showTime(i, m, CRGB::Red);
         FastLED.show();
         delay(200);
       }
@@ -264,87 +336,102 @@ void test() {
   }
 }
 
-void showTime(int h, int m, int s) {
+void showTime(int h, int m, CRGB color) {
 
   h = h % 12;
   int next = (h + 1) % 12;
   if (m > 58) {
-    beforeHour[next](CRGB::Red);
+    beforeHour[next](color);
     return;
   }
   if (m > 56) {
-    za(CRGB::White);
-    trzy(CRGB::Yellow);
-    beforeHour[next](CRGB::Red);
+    za(color);
+    trzy(color);
+    beforeHour[next](color);
     return;
   }
   if (m > 52) {
-    za(CRGB::White);
-    piec(CRGB::Orange);
-    beforeHour[next](CRGB::Red);
+    za(color);
+    piec(color);
+    beforeHour[next](color);
     return;
   }
   if (m > 47) {
-    za(CRGB::White);
-    dziesiec(CRGB::White);
-    beforeHour[next](CRGB::Red);
+    za(color);
+    dziesiec(color);
+    beforeHour[next](color);
     return;
   }
   if (m > 42) {
-    za(CRGB::White);
-    kwadrans(CRGB::White);
-    beforeHour[next](CRGB::Red);
+    za(color);
+    kwadrans(color);
+    beforeHour[next](color);
+    return;
+  }
+  if (m > 37) {
+    za(color);
+    dwadziescia(color);
+    beforeHour[next](color);
     return;
   }
   if (m > 32) {
-    za(CRGB::White);
-    dwadziescia(CRGB::White);
-    piec(CRGB::White);
-    beforeHour[next](CRGB::LightGreen);
+    za(color);
+    dwadziescia(color);
+    piec(color);
+    beforeHour[next](color);
     return;
   }
   if (m > 27) {
-    wpol(CRGB::White);
-    _do(CRGB::White);
-    afterHour[next](CRGB::Lime);
+    wpol(color);
+    _do(color);
+    afterHour[next](color);
     return;
   }
   if (m > 22) {
-    dwadziescia(CRGB::White);
-    piec(CRGB::White);
-    po(CRGB::White);
-    afterHour[h](CRGB::Magenta);
+    dwadziescia(color);
+    piec(color);
+    po(color);
+    afterHour[h](color);
     return;
   }
   if (m > 16) {
-    dwadziescia(CRGB::White);
-    po(CRGB::White);
-    afterHour[h](CRGB::OrangeRed);
+    dwadziescia(color);
+    po(color);
+    afterHour[h](color);
     return;
   }
   if (m > 12) {
-    kwadrans(CRGB::White);
-    po(CRGB::White);
-    afterHour[h](CRGB::OrangeRed);
+    kwadrans(color);
+    po(color);
+    afterHour[h](color);
     return;
   }
   if (m > 7) {
-    dziesiec(CRGB::White);
-    po(CRGB::White);
-    afterHour[h](CRGB::PaleVioletRed);
+    dziesiec(color);
+    po(color);
+    afterHour[h](color);
     return;
   }
   if (m > 3) {
-    piec(CRGB::White);
-    po(CRGB::White);
-    afterHour[h](CRGB::Plum);
+    piec(color);
+    po(color);
+    afterHour[h](color);
     return;
   }
   if (m > 1) {
-    trzy(CRGB::White);
-    po(CRGB::White);
-    afterHour[h](CRGB::Purple);
+    trzy(color);
+    po(color);
+    afterHour[h](color);
     return;
   }
-  beforeHour[h](CRGB::Red);
+  beforeHour[h](color);
+}
+
+int getBrightness() {
+  int b = (1024 - analogRead(A0)) / 4;
+  b += 10;
+  if (b > 256) {
+    b = 255;
+  }
+  return b;
 }
